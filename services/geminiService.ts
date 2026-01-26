@@ -1,13 +1,21 @@
 import { GoogleGenAI, Chat } from "@google/genai";
 import { GroundingChunk, ChatMessage } from "../types";
 
-const API_KEY = process.env.API_KEY;
+// The API key must be obtained exclusively from process.env.API_KEY.
+// We assume it is pre-configured and valid.
+let ai: GoogleGenAI | null = null;
+let chatSession: Chat | null = null;
 
-if (!API_KEY) {
-  console.error("API_KEY is missing from environment variables.");
-}
-
-const ai = new GoogleGenAI({ apiKey: API_KEY });
+const getAI = () => {
+  if (!ai) {
+    // Check if the key exists before initializing to provide a clear error
+    if (!process.env.API_KEY) {
+      throw new Error("API Key is missing. Please add API_KEY to your environment variables.");
+    }
+    ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  }
+  return ai;
+};
 
 // The specific 5-Step Workflow requested
 const SYSTEM_INSTRUCTION = `You are the "Canadian Ability Grant Support Advisor". Your job is to read a user's simple profile, find matches, and help them fill out forms.
@@ -52,14 +60,9 @@ const SYSTEM_INSTRUCTION = `You are the "Canadian Ability Grant Support Advisor"
 - Always ensure the form content is professional/medical/bureaucratic.
 - Use the Google Search tool to ensure grant requirements are current.`;
 
-let chatSession: Chat | null = null;
-
 export const initializeChat = () => {
-  if (!API_KEY) {
-    throw new Error("API Key not found.");
-  }
-
-  chatSession = ai.chats.create({
+  const genAI = getAI();
+  chatSession = genAI.chats.create({
     model: 'gemini-3-pro-preview',
     config: {
       systemInstruction: SYSTEM_INSTRUCTION,

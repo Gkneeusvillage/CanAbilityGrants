@@ -1,20 +1,46 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Canadian Ability Grant Advisor
 
-# Run and deploy your AI Studio app
+An empathetic AI agent designed to help users with Grade 3 reading levels access complex government grants by managing the search, clarification, and form-filling process.
 
-This contains everything you need to run your app locally.
+## Local Development
 
-View your app in AI Studio: https://ai.studio/apps/drive/1Wqm3CVTSc5-eo4uK8GJT2-gZw3CN7LPu
+1. **Install Dependencies**
+   ```bash
+   npm install
+   ```
 
-## Run Locally
+2. **Configure Environment**
+   Create a `.env` file in the root directory and add your Google Gemini API key:
+   ```env
+   API_KEY=your_actual_api_key_here
+   ```
 
-**Prerequisites:**  Node.js
+3. **Run Development Server**
+   ```bash
+   npm run dev
+   ```
 
+## Deployment to GitHub Pages
 
-1. Install dependencies:
-   `npm install`
-2. Set the `API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+This project includes a GitHub Actions workflow (`.github/workflows/deploy.yml`) that automatically builds and deploys the application to GitHub Pages whenever you push to the `main` branch.
+
+**Critical Step:** You must add your API Key to GitHub Secrets for the build to work.
+
+### How to Add the API Key to GitHub Secrets
+
+1. Navigate to your repository on **GitHub**.
+2. Click on the **Settings** tab (usually the rightmost tab in the top navigation bar).
+3. In the left sidebar, scroll down to the **Security** section.
+4. Expand **Secrets and variables** and click on **Actions**.
+5. Click the green **New repository secret** button.
+6. Enter the following details:
+   - **Name:** `API_KEY`
+   - **Secret:** *[Paste your Google Gemini API Key here]*
+7. Click **Add secret**.
+
+### Triggering a Deployment
+
+Once the secret is saved:
+1. Push any change to the `main` branch.
+2. Click the **Actions** tab in your repository to watch the build progress.
+3. Once the workflow completes, your site will be live. You can find the URL in **Settings > Pages**.

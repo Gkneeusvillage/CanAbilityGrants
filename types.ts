@@ -29,4 +29,11 @@ export interface ChatMessage {
     text: string;
     groundingChunks?: GroundingChunk[];
     isStreaming?: boolean;
+    hasError?: boolean;
+}
+
+export interface QuickOption {
+    id: string;
+    label: string;
+    value: string;
 }

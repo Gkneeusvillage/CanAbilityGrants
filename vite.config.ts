@@ -8,9 +8,9 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, (process as any).cwd(), '');
   return {
     plugins: [react()],
-    // Ensures assets are linked relatively, which is required for GitHub Pages
+    // Ensures assets are linked relatively, which is required for GitHub Pages 
     // (e.g. username.github.io/repo-name/)
-    base: './',
+    base: './', 
     define: {
       // Prioritize process.env.API_KEY (System var) over .env file var
       'process.env.API_KEY': JSON.stringify(process.env.API_KEY || env.API_KEY),
