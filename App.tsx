@@ -12,11 +12,19 @@ import {
   Copy,
   Mail,
   ChevronDown,
+  ChevronRight,
   FileText,
   Check
 } from 'lucide-react';
 import { sendMessageStream, initializeChat } from './services/geminiService';
 import { GroundingChunk, ChatMessage, QuickOption } from './types';
+
+// Interface for multi-question answers
+interface QuestionAnswer {
+  questionId: string;
+  questionText: string;
+  answer: 'yes' | 'no' | null;
+}
 import ReactMarkdown from 'react-markdown';
 import type { Components } from 'react-markdown';
 
@@ -48,6 +56,8 @@ const App: React.FC = () => {
   const [isInitializing, setIsInitializing] = useState(false);
   const [showShareMenu, setShowShareMenu] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
+  const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set());
+  const [multiAnswers, setMultiAnswers] = useState<Record<string, QuestionAnswer[]>>({});
   const shareMenuRef = useRef<HTMLDivElement>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -150,6 +160,95 @@ const App: React.FC = () => {
     }
     return options.slice(0, 6); // Max 6 options
   }, []);
+
+  // Parse multi-part questions that need Yes/No answers
+  const parseMultiQuestions = useCallback((text: string): QuestionAnswer[] => {
+    const questions: QuestionAnswer[] = [];
+    const lines = text.split('\n');
+
+    for (const line of lines) {
+      // Match numbered questions ending with "?"
+      const match = line.match(/^\s*\*?\*?(\d+)[.):\s]+\*?\*?\s*(.+\?)\s*$/);
+      if (match) {
+        const num = match[1];
+        let questionText = match[2].trim();
+        questionText = questionText.replace(/\*\*/g, '').trim();
+        if (questionText.length > 5) {
+          questions.push({
+            questionId: `q-${num}`,
+            questionText: questionText,
+            answer: null
+          });
+        }
+      }
+    }
+    return questions.slice(0, 10); // Max 10 questions
+  }, []);
+
+  // Check if message contains multiple questions requiring individual answers
+  const hasMultipleQuestions = useCallback((text: string): boolean => {
+    const questions = parseMultiQuestions(text);
+    return questions.length >= 2;
+  }, [parseMultiQuestions]);
+
+  // Toggle message expansion
+  const toggleMessageExpansion = useCallback((msgId: string) => {
+    setExpandedMessages(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(msgId)) {
+        newSet.delete(msgId);
+      } else {
+        newSet.add(msgId);
+      }
+      return newSet;
+    });
+  }, []);
+
+  // Handle radio button change for multi-question answers
+  const handleMultiAnswerChange = useCallback((msgId: string, questionId: string, answer: 'yes' | 'no') => {
+    setMultiAnswers(prev => {
+      const currentAnswers = prev[msgId] || [];
+      const existingIndex = currentAnswers.findIndex(a => a.questionId === questionId);
+
+      if (existingIndex >= 0) {
+        const updated = [...currentAnswers];
+        updated[existingIndex] = { ...updated[existingIndex], answer };
+        return { ...prev, [msgId]: updated };
+      } else {
+        return { ...prev, [msgId]: [...currentAnswers, { questionId, questionText: '', answer }] };
+      }
+    });
+  }, []);
+
+  // Submit all multi-question answers
+  const handleSubmitMultiAnswers = useCallback((msgId: string, questions: QuestionAnswer[]) => {
+    const answers = multiAnswers[msgId] || [];
+
+    // Build response text from answers
+    const responseLines = questions.map((q, idx) => {
+      const answer = answers.find(a => a.questionId === q.questionId);
+      const answerText = answer?.answer === 'yes' ? 'Yes' : answer?.answer === 'no' ? 'No' : 'Not answered';
+      return `${idx + 1}. ${q.questionText} - ${answerText}`;
+    });
+
+    const responseText = responseLines.join('\n');
+
+    // Clear the multi-answers for this message
+    setMultiAnswers(prev => {
+      const updated = { ...prev };
+      delete updated[msgId];
+      return updated;
+    });
+
+    // Send the combined response
+    handleSendWithText(responseText);
+  }, [multiAnswers]);
+
+  // Check if all questions are answered for a message
+  const areAllQuestionsAnswered = useCallback((msgId: string, questions: QuestionAnswer[]): boolean => {
+    const answers = multiAnswers[msgId] || [];
+    return questions.every(q => answers.some(a => a.questionId === q.questionId && a.answer !== null));
+  }, [multiAnswers]);
 
   // Generate contextual quick replies based on last AI message
   const getQuickReplies = useCallback((): QuickOption[] => {
@@ -762,95 +861,208 @@ const App: React.FC = () => {
                     <h2 className="font-bold text-maple-700">Advisor Responses</h2>
                   </div>
                 </div>
-                <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                  {messages.filter(m => m.role === 'model').map((msg) => (
-                    <div
-                      key={msg.id}
-                      className={`rounded-2xl rounded-tl-none p-4 shadow-sm ${
-                        msg.hasError
-                          ? 'bg-red-50 border border-red-200'
-                          : 'bg-slate-50 border border-slate-100'
-                      }`}
-                    >
-                      <div className="dyslexia-mode text-base leading-relaxed text-slate-800">
-                        <ReactMarkdown components={MARKDOWN_COMPONENTS}>
-                          {msg.text}
-                        </ReactMarkdown>
-                      </div>
+                <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                  {(() => {
+                    const modelMessages = messages.filter(m => m.role === 'model');
+                    const lastMsgId = modelMessages[modelMessages.length - 1]?.id;
 
-                      {/* Clickable Options */}
-                      {!msg.isStreaming && !msg.hasError && (() => {
-                        const options = parseOptionsFromText(msg.text);
-                        if (options.length > 0) {
-                          return (
-                            <div className="mt-4 pt-4 border-t border-slate-200">
-                              <p className="text-sm font-bold text-slate-500 mb-3">Click to select:</p>
-                              <div className="flex flex-wrap gap-2">
-                                {options.map((opt) => (
-                                  <button
-                                    key={opt.id}
-                                    onClick={() => handleOptionClick(opt)}
-                                    disabled={isProcessing}
-                                    className="px-3 py-2 bg-blue-50 hover:bg-blue-100 border-2 border-blue-200 hover:border-blue-400 text-blue-800 rounded-lg transition-all text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed text-left"
-                                  >
-                                    {opt.label}
-                                  </button>
-                                ))}
-                              </div>
+                    return modelMessages.map((msg, index) => {
+                      const isLatest = msg.id === lastMsgId;
+                      const isExpanded = isLatest || expandedMessages.has(msg.id);
+                      const multiQuestions = parseMultiQuestions(msg.text);
+                      const hasMultiQ = multiQuestions.length >= 2 && !msg.isStreaming && !msg.hasError;
+
+                      return (
+                        <div
+                          key={msg.id}
+                          className={`rounded-2xl shadow-sm overflow-hidden transition-all ${
+                            msg.hasError
+                              ? 'bg-red-50 border border-red-200'
+                              : isLatest
+                              ? 'bg-blue-50 border-2 border-blue-300'
+                              : 'bg-slate-50 border border-slate-200'
+                          }`}
+                        >
+                          {/* Collapsible Header for non-latest messages */}
+                          {!isLatest && (
+                            <button
+                              onClick={() => toggleMessageExpansion(msg.id)}
+                              className="w-full px-4 py-3 flex items-center justify-between hover:bg-slate-100 transition-colors"
+                            >
+                              <span className="text-sm font-medium text-slate-600 truncate flex-1 text-left">
+                                {msg.text.substring(0, 60)}...
+                              </span>
+                              {isExpanded ? (
+                                <ChevronDown size={18} className="text-slate-400 shrink-0 ml-2" />
+                              ) : (
+                                <ChevronRight size={18} className="text-slate-400 shrink-0 ml-2" />
+                              )}
+                            </button>
+                          )}
+
+                          {/* Latest message label */}
+                          {isLatest && (
+                            <div className="px-4 py-2 bg-blue-100 border-b border-blue-200">
+                              <span className="text-sm font-bold text-blue-700">Current Question</span>
                             </div>
-                          );
-                        }
-                        return null;
-                      })()}
+                          )}
 
-                      {/* Error retry button */}
-                      {msg.hasError && (
-                        <div className="mt-4 flex items-center gap-2">
-                          <button
-                            onClick={() => {
-                              const msgIndex = messages.findIndex(m => m.id === msg.id);
-                              const userMsgIndex = msgIndex - 1;
-                              if (userMsgIndex >= 0) {
-                                handleRetry(messages[userMsgIndex].id);
-                              }
-                            }}
-                            className="flex items-center gap-2 text-sm bg-red-100 text-red-700 px-3 py-2 rounded-lg hover:bg-red-200 transition-colors font-bold"
-                          >
-                            <RotateCcw size={14} />
-                            Try Again
-                          </button>
-                        </div>
-                      )}
+                          {/* Expandable Content */}
+                          {isExpanded && (
+                            <div className="p-4">
+                              <div className="dyslexia-mode text-base leading-relaxed text-slate-800">
+                                <ReactMarkdown components={MARKDOWN_COMPONENTS}>
+                                  {msg.text}
+                                </ReactMarkdown>
+                              </div>
 
-                      {/* Sources */}
-                      {Array.isArray(msg.groundingChunks) && msg.groundingChunks.length > 0 && (
-                        <div className="mt-4 pt-4 border-t border-slate-200">
-                          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Sources:</p>
-                          <div className="flex flex-wrap gap-2">
-                            {Array.from(new Set(msg.groundingChunks.map(c => c.web?.uri).filter(Boolean))).map((uri, idx) => {
-                              const chunk = msg.groundingChunks?.find(c => c.web?.uri === uri);
-                              return (
-                                <a
-                                  key={idx}
-                                  href={uri}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="inline-flex items-center gap-1 text-xs bg-white text-blue-700 px-2 py-1 rounded border border-slate-200 hover:bg-blue-50 transition-colors font-medium"
-                                >
-                                  <ExternalLink size={12} />
-                                  <span className="max-w-[150px] truncate">{chunk?.web?.title || "Source"}</span>
-                                </a>
-                              );
-                            })}
-                          </div>
+                              {/* Multi-Question Radio Buttons UI */}
+                              {hasMultiQ && isLatest && (
+                                <div className="mt-4 pt-4 border-t border-blue-200">
+                                  <p className="text-sm font-bold text-blue-700 mb-4">Please answer each question:</p>
+                                  <div className="space-y-4">
+                                    {multiQuestions.map((q, qIdx) => {
+                                      const currentAnswers = multiAnswers[msg.id] || [];
+                                      const currentAnswer = currentAnswers.find(a => a.questionId === q.questionId)?.answer;
+
+                                      return (
+                                        <div key={q.questionId} className="bg-white rounded-xl p-4 border border-slate-200">
+                                          <p className="text-base font-medium text-slate-800 mb-3">
+                                            {qIdx + 1}. {q.questionText}
+                                          </p>
+                                          <div className="flex gap-4">
+                                            <label className="flex items-center gap-2 cursor-pointer">
+                                              <input
+                                                type="radio"
+                                                name={`${msg.id}-${q.questionId}`}
+                                                checked={currentAnswer === 'yes'}
+                                                onChange={() => handleMultiAnswerChange(msg.id, q.questionId, 'yes')}
+                                                disabled={isProcessing}
+                                                className="w-5 h-5 text-green-600 border-2 border-slate-300 focus:ring-green-500"
+                                              />
+                                              <span className="text-base font-medium text-green-700">Yes</span>
+                                            </label>
+                                            <label className="flex items-center gap-2 cursor-pointer">
+                                              <input
+                                                type="radio"
+                                                name={`${msg.id}-${q.questionId}`}
+                                                checked={currentAnswer === 'no'}
+                                                onChange={() => handleMultiAnswerChange(msg.id, q.questionId, 'no')}
+                                                disabled={isProcessing}
+                                                className="w-5 h-5 text-red-600 border-2 border-slate-300 focus:ring-red-500"
+                                              />
+                                              <span className="text-base font-medium text-red-700">No</span>
+                                            </label>
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+
+                                  {/* Submit All Answers Button */}
+                                  <button
+                                    onClick={() => handleSubmitMultiAnswers(msg.id, multiQuestions)}
+                                    disabled={!areAllQuestionsAnswered(msg.id, multiQuestions) || isProcessing}
+                                    className="mt-4 w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2"
+                                  >
+                                    {isProcessing ? (
+                                      <>
+                                        <Loader2 className="animate-spin" size={20} />
+                                        Submitting...
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Check size={20} />
+                                        Submit All Answers
+                                      </>
+                                    )}
+                                  </button>
+
+                                  {!areAllQuestionsAnswered(msg.id, multiQuestions) && (
+                                    <p className="text-sm text-slate-500 text-center mt-2">
+                                      Please answer all questions above to continue
+                                    </p>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Single-choice Options (when not multi-question) */}
+                              {!hasMultiQ && !msg.isStreaming && !msg.hasError && (() => {
+                                const options = parseOptionsFromText(msg.text);
+                                if (options.length > 0 && isLatest) {
+                                  return (
+                                    <div className="mt-4 pt-4 border-t border-slate-200">
+                                      <p className="text-sm font-bold text-slate-500 mb-3">Click to select:</p>
+                                      <div className="flex flex-wrap gap-2">
+                                        {options.map((opt) => (
+                                          <button
+                                            key={opt.id}
+                                            onClick={() => handleOptionClick(opt)}
+                                            disabled={isProcessing}
+                                            className="px-3 py-2 bg-blue-50 hover:bg-blue-100 border-2 border-blue-200 hover:border-blue-400 text-blue-800 rounded-lg transition-all text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed text-left"
+                                          >
+                                            {opt.label}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  );
+                                }
+                                return null;
+                              })()}
+
+                              {/* Error retry button */}
+                              {msg.hasError && (
+                                <div className="mt-4 flex items-center gap-2">
+                                  <button
+                                    onClick={() => {
+                                      const msgIndex = messages.findIndex(m => m.id === msg.id);
+                                      const userMsgIndex = msgIndex - 1;
+                                      if (userMsgIndex >= 0) {
+                                        handleRetry(messages[userMsgIndex].id);
+                                      }
+                                    }}
+                                    className="flex items-center gap-2 text-sm bg-red-100 text-red-700 px-3 py-2 rounded-lg hover:bg-red-200 transition-colors font-bold"
+                                  >
+                                    <RotateCcw size={14} />
+                                    Try Again
+                                  </button>
+                                </div>
+                              )}
+
+                              {/* Sources */}
+                              {Array.isArray(msg.groundingChunks) && msg.groundingChunks.length > 0 && (
+                                <div className="mt-4 pt-4 border-t border-slate-200">
+                                  <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Sources:</p>
+                                  <div className="flex flex-wrap gap-2">
+                                    {Array.from(new Set(msg.groundingChunks.map(c => c.web?.uri).filter(Boolean))).map((uri, idx) => {
+                                      const chunk = msg.groundingChunks?.find(c => c.web?.uri === uri);
+                                      return (
+                                        <a
+                                          key={idx}
+                                          href={uri}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="inline-flex items-center gap-1 text-xs bg-white text-blue-700 px-2 py-1 rounded border border-slate-200 hover:bg-blue-50 transition-colors font-medium"
+                                        >
+                                          <ExternalLink size={12} />
+                                          <span className="max-w-[150px] truncate">{chunk?.web?.title || "Source"}</span>
+                                        </a>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
-                  ))}
+                      );
+                    });
+                  })()}
 
                   {/* Loading state */}
                   {isProcessing && messages[messages.length - 1]?.role === 'user' && (
-                    <div className="flex items-center gap-3 p-4">
+                    <div className="flex items-center gap-3 p-4 bg-slate-50 rounded-2xl border border-slate-200">
                       <Loader2 className="animate-spin text-maple-600" size={24} />
                       <span className="text-slate-500 italic animate-pulse">Searching and thinking...</span>
                     </div>
